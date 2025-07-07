@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,13 +44,14 @@ func worker(id int, websiteURL string, client *http.Client, jobs <-chan string, 
 }
 
 func code(codeDict map[string]int, code int) {
-	if code < 300 {
+	switch {
+	case code < 300:
 		codeDict["2xx"]++
-	} else if code < 400 {
+	case code < 400:
 		codeDict["3xx"]++
-	} else if code < 500 {
+	case code < 500:
 		codeDict["4xx"]++
-	} else {
+	default:
 		codeDict["5xx"]++
 	}
 }
@@ -63,16 +65,23 @@ func main() {
 	websiteURL, _ := reader.ReadString('\n')
 	websiteURL = strings.TrimSpace(websiteURL)
 
-	fmt.Print("请输入工作线程（不写则默认为16）:")
+	fmt.Print("请输入工作线程（不写则默认为16，建议不超过CPU核心数的10倍）:")
 	workersStr, _ := reader.ReadString('\n')
 	workersStr = strings.TrimSpace(workersStr)
 
 	workers := 16
+	maxWorkers := runtime.NumCPU() * 10
 	if workersStr != "" {
 		if val, err := strconv.Atoi(workersStr); err == nil {
-			workers = val
+			if val > 0 && val <= maxWorkers {
+				workers = val
+			} else if val > maxWorkers {
+				fmt.Printf("线程数过高，已限制为%d\n", maxWorkers)
+				workers = maxWorkers
+			}
 		}
 	}
+	fmt.Printf("实际工作线程数：%d\n", workers)
 	fmt.Println(strings.Repeat("-", 16))
 
 	startTime := time.Now()
@@ -113,7 +122,9 @@ func main() {
 
 	//
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+		MaxIdleConns:        200,
+		MaxIdleConnsPerHost: 200,
 	}
 	client := &http.Client{Timeout: 5 * time.Second, Transport: tr}
 
@@ -138,7 +149,9 @@ func main() {
 	for res := range results {
 		count++
 		code(codeReport, res.code)
-		fmt.Printf("%.2f%% >>> %d / %d >>> %d %s\n", float64(count)/float64(allCount)*100, count, allCount, res.code, res.url)
+		if count%100 == 0 || count == allCount {
+			fmt.Printf("%.2f%% >>> %d / %d >>> %d %s\n", float64(count)/float64(allCount)*100, count, allCount, res.code, res.url)
+		}
 	}
 
 	fmt.Println("\n>>> 已全部分发完毕~")
